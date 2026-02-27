@@ -28,6 +28,28 @@ function(req, res) {
 }
 
 # ============================================================
+# Health / diagnostic endpoint
+# ============================================================
+
+#* Server health and path diagnostics
+#* @get /api/health
+#* @serializer unboxedJSON
+function() {
+  files <- tryCatch(
+    list.files(DATA_DIR, pattern = "\\.(xlsx|csv)$",
+               full.names = FALSE, ignore.case = TRUE),
+    error = function(e) character(0)
+  )
+  list(
+    status     = "ok",
+    wd         = getwd(),
+    data_dir   = DATA_DIR,
+    data_exists = dir.exists(DATA_DIR),
+    files_found = as.list(files)
+  )
+}
+
+# ============================================================
 # Variable endpoints
 # ============================================================
 

@@ -48,6 +48,12 @@ cat("  URL     : http://localhost:8080\n")
 cat("  Donnees : ./data/    (placez vos fichiers ici)\n")
 cat("  Sauves  : ./saves/   (snapshots automatiques)\n")
 cat("===================================================\n")
+cat(sprintf("  WD      : %s\n", getwd()))
+cat(sprintf("  Donnees : %s (%d fichier(s))\n",
+            file.path(getwd(), "data"),
+            length(list.files("data", pattern = "\\.(xlsx|csv)$",
+                              ignore.case = TRUE))))
+cat("===================================================\n")
 cat("  Ctrl+C pour arreter le serveur\n\n")
 
 # Start the Plumber API

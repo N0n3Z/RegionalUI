@@ -2,8 +2,10 @@
 # api/utils.R - Utility functions for RegionalUI
 # =============================================================
 
-DATA_DIR  <- "data"
-SAVES_DIR <- "saves"
+# Use absolute paths so file operations work regardless of working-directory
+# changes during Plumber's request handling.
+DATA_DIR  <- normalizePath("data",  mustWork = FALSE)
+SAVES_DIR <- normalizePath("saves", mustWork = FALSE)
 
 # Year column candidates (in order of preference)
 YEAR_COLS <- c("YEAR", "ANNEE", "PERIODE", "PERIOD", "DATE", "AN")
