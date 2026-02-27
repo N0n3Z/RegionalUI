@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RegionalUI — Données Géographiques</title>
+
+  <!-- Tabulator 6.2 -->
+  <link  href="https://unpkg.com/tabulator-tables@6.2.1/dist/css/tabulator.min.css" rel="stylesheet">
+  <script src="https://unpkg.com/tabulator-tables@6.2.1/dist/js/tabulator.min.js"></script>
+
+  <!-- Chart.js 4 -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ===================== HEADER ===================== -->
+<header class="app-header">
+  <div class="header-brand">
+    <span class="brand-icon">◈</span>
+    <span class="brand-name">RegionalUI</span>
+  </div>
+
+  <div class="header-controls">
+    <div class="ctrl-group">
+      <label for="variable-select">Variable</label>
+      <select id="variable-select">
+        <option value="">— sélectionner —</option>
+      </select>
+    </div>
+
+    <div class="ctrl-group" id="year-ctrl" style="display:none">
+      <label for="year-select">Année</label>
+      <select id="year-select">
+        <option value="">Toutes</option>
+      </select>
+    </div>
+
+    <div class="ctrl-separator"></div>
+
+    <button id="btn-commit"  class="btn btn-commit"  disabled title="Enregistrer les modifications sur le disque">
+      💾 Valider
+    </button>
+    <span id="dirty-dot" class="dirty-dot" style="display:none" title="Modifications non enregistrées">●</span>
+
+    <button id="btn-save"    class="btn btn-secondary" title="Créer un snapshot horodaté">
+      📷 Sauvegarder
+    </button>
+    <button id="btn-history" class="btn btn-secondary" title="Voir l'historique des snapshots">
+      📚 Historique
+    </button>
+  </div>
+
+  <div class="header-info">
+    <span id="sel-info" class="sel-info"></span>
+  </div>
+</header>
+
+<!-- ===================== MAIN ===================== -->
+<main class="app-main">
+
+  <!-- Table section -->
+  <section class="table-section">
+    <div class="table-toolbar">
+      <span id="table-info" class="table-info">Aucune variable chargée</span>
+      <span class="table-hint">Clic droit pour les opérations · Double-clic pour éditer la colonne VALUE</span>
+    </div>
+    <div id="data-table"></div>
+  </section>
+
+  <!-- Charts section -->
+  <section class="charts-section">
+    <div class="chart-panel">
+      <div class="chart-title">Valeurs par territoire</div>
+      <div class="chart-wrap">
+        <canvas id="bar-chart"></canvas>
+      </div>
+    </div>
+    <div class="chart-divider"></div>
+    <div class="chart-panel">
+      <div class="chart-title">Part relative (%)</div>
+      <div class="chart-wrap">
+        <canvas id="pie-chart"></canvas>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ===================== FOOTER ===================== -->
+<footer class="app-footer">
+  <div id="status-bar" class="status-info">Prêt · Démarrez le serveur avec <code>Rscript start.R</code></div>
+</footer>
+
+<!-- ===================== LOADING ===================== -->
+<div id="loading-overlay" class="hidden">
+  <div class="spinner"></div>
+</div>
+
+<!-- ===================== CONTEXT MENU ===================== -->
+<div id="ctx-menu" class="ctx-menu" style="display:none"></div>
+
+<!-- ===================== MODALS ===================== -->
+
+<!-- Edit value dialog -->
+<div id="edit-dialog" class="dialog-overlay hidden">
+  <div class="dialog-box">
+    <div class="dialog-title" id="edit-dialog-title">Modifier la valeur</div>
+    <input type="number" id="edit-value-input" step="any" class="dialog-input" placeholder="Entrez la valeur">
+    <div class="dialog-actions">
+      <button id="btn-edit-confirm" class="btn btn-primary">Confirmer</button>
+      <button id="btn-edit-cancel"  class="btn btn-secondary">Annuler</button>
+    </div>
+  </div>
+</div>
+
+<!-- Operation dialog -->
+<div id="op-modal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h3 id="op-modal-title" class="modal-title"></h3>
+      <button class="btn-close" data-close="op-modal">✕</button>
+    </div>
+    <div class="modal-body">
+      <p id="op-modal-desc" class="modal-desc"></p>
+      <div id="op-scope-info" class="scope-badge"></div>
+      <form id="op-form" class="op-form" onsubmit="return false"></form>
+    </div>
+    <div class="modal-footer">
+      <button id="btn-op-execute" class="btn btn-primary">Appliquer</button>
+      <button class="btn btn-secondary" data-close="op-modal">Annuler</button>
+    </div>
+  </div>
+</div>
+
+<!-- Save dialog -->
+<div id="save-modal" class="modal-overlay hidden">
+  <div class="modal-box modal-sm">
+    <div class="modal-header">
+      <h3 class="modal-title">Créer un snapshot</h3>
+      <button class="btn-close" data-close="save-modal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label for="save-desc">Description (optionnel)</label>
+        <input type="text" id="save-desc" class="form-input"
+               placeholder="Ex: après correction des données 2022">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button id="btn-save-confirm" class="btn btn-primary">Sauvegarder</button>
+      <button class="btn btn-secondary" data-close="save-modal">Annuler</button>
+    </div>
+  </div>
+</div>
+
+<!-- History dialog -->
+<div id="hist-modal" class="modal-overlay hidden">
+  <div class="modal-box modal-lg">
+    <div class="modal-header">
+      <h3 class="modal-title">Historique des snapshots</h3>
+      <button class="btn-close" data-close="hist-modal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="hist-list" class="hist-list"></div>
+    </div>
+  </div>
+</div>
+
+<script src="js/app.js"></script>
+</body>
+</html>
