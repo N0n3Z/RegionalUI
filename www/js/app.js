@@ -9,31 +9,31 @@
 // State
 // ============================================================
 const S = {
-  variables:    [],       // [{name, file, type}]
-  variable:     null,     // current variable name
-  columns:      [],       // column names from file
-  yearCol:      null,     // name of the year column, or null
-  years:        [],       // sorted list of available years
-  year:         null,     // currently selected year filter (null = all)
-  data:         [],       // full in-memory dataset (all years)
-  operations:   [],       // operation definitions from API
-  dirty:        false,    // unsaved edits?
-  ctxCell:      null,     // row data when context menu was opened
-  ctxField:     null,     // field name when context menu was opened
-  selectedRows: []        // currently selected rows
+  variables:    [],
+  variable:     null,
+  columns:      [],
+  yearCol:      null,
+  years:        [],
+  year:         null,
+  data:         [],        // full in-memory dataset (all years)
+  operations:   [],
+  dirty:        false,
+  ctxCell:      null,
+  ctxField:     null,
+  selectedRows: []
 };
 
-let tableInst = null;   // Tabulator instance
-let barChart  = null;   // Chart.js bar
-let pieChart  = null;   // Chart.js pie/doughnut
+let tableInst  = null;   // Tabulator – main editable table
+let sharesInst = null;   // Tabulator – shares wide table
+let growthInst = null;   // Tabulator – growth wide table
 
 // ============================================================
-// API helpers
+// API
 // ============================================================
 const api = {
   async _get(url) {
     const r = await fetch(url);
-    if (!r.ok) throw new Error(`HTTP ${r.status} – ${url}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return r.json();
   },
   async _post(url, body) {
@@ -42,27 +42,27 @@ const api = {
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify(body)
     });
-    if (!r.ok) throw new Error(`HTTP ${r.status} – ${url}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return r.json();
   },
-
-  variables:  ()             => api._get('/api/variables'),
-  operations: ()             => api._get('/api/operations'),
-  getData:    (v)            => api._get(`/api/data/${encodeURIComponent(v)}`),
-  getHistory: (v)            => api._get(`/api/data/${encodeURIComponent(v)}/history`),
-  applyOp:    (op, body)     => api._post(`/api/operations/${encodeURIComponent(op)}`, body),
-  save:       (v, data, desc)=> api._post(`/api/data/${encodeURIComponent(v)}/save`,
-                                          { data, description: desc }),
-  restore:    (v, ts)        => api._post(`/api/data/${encodeURIComponent(v)}/restore`,
-                                          { timestamp: ts }),
-  commit:     (v, data)      => api._post(`/api/data/${encodeURIComponent(v)}/commit`,
-                                          { data })
+  variables:  ()         => api._get('/api/variables'),
+  operations: ()         => api._get('/api/operations'),
+  getData:    v          => api._get(`/api/data/${enc(v)}`),
+  getHistory: v          => api._get(`/api/data/${enc(v)}/history`),
+  applyOp:    (op, body) => api._post(`/api/operations/${enc(op)}`, body),
+  save:     (v, data, d) => api._post(`/api/data/${enc(v)}/save`,    { data, description: d }),
+  restore:   (v, ts)     => api._post(`/api/data/${enc(v)}/restore`, { timestamp: ts }),
+  commit:    (v, data)   => api._post(`/api/data/${enc(v)}/commit`,  { data }),
+  shares:    (data, yc)  => api._post('/api/compute/shares', { data, year_col: yc || '' }),
+  growth:    (data, yc)  => api._post('/api/compute/growth', { data, year_col: yc || '' })
 };
+
+const enc = encodeURIComponent;
 
 // ============================================================
 // UI helpers
 // ============================================================
-const fmt = (n) =>
+const fmtNum = n =>
   (n == null || n === '') ? '' :
   new Intl.NumberFormat('fr-BE', { maximumFractionDigits: 4 }).format(n);
 
@@ -79,63 +79,114 @@ function showLoad(on = true) {
 function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
 function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
 
-// Close any modal/dialog by clicking its overlay
-document.querySelectorAll('.modal-overlay, .dialog-overlay').forEach(el => {
-  el.addEventListener('click', e => { if (e.target === el) el.classList.add('hidden'); });
-});
-
-// Close buttons decorated with data-close
-document.querySelectorAll('[data-close]').forEach(btn => {
-  btn.addEventListener('click', () => closeModal(btn.dataset.close));
-});
+document.querySelectorAll('.modal-overlay, .dialog-overlay').forEach(el =>
+  el.addEventListener('click', e => { if (e.target === el) el.classList.add('hidden'); })
+);
+document.querySelectorAll('[data-close]').forEach(btn =>
+  btn.addEventListener('click', () => closeModal(btn.dataset.close))
+);
 
 function setDirty(val) {
   S.dirty = val;
-  const dot = document.getElementById('dirty-dot');
+  document.getElementById('dirty-dot').style.display   = val ? 'inline' : 'none';
   const btn = document.getElementById('btn-commit');
-  dot.style.display = val ? 'inline' : 'none';
-  btn.disabled      = !val;
+  btn.disabled = !val;
   btn.classList.toggle('dirty', val);
 }
 
-function setTableInfo(msg) {
-  document.getElementById('table-info').textContent = msg;
-}
-
-function setSelInfo(msg) {
+function setTableInfo(msg) { document.getElementById('table-info').textContent = msg; }
+function setSelInfo(msg)  {
   const el = document.getElementById('sel-info');
   el.textContent = msg;
   el.style.display = msg ? 'inline' : 'none';
 }
 
 // ============================================================
-// Variable loading
+// Splitters (drag-to-resize panels)
+// ============================================================
+function initSplitters() {
+  makeSplitter(
+    document.getElementById('drag-h'),
+    document.getElementById('pane-data'),
+    null,
+    'h',
+    document.getElementById('top-row')
+  );
+  makeSplitter(
+    document.getElementById('drag-v'),
+    document.getElementById('top-row'),
+    null,
+    'v',
+    document.querySelector('.app-main')
+  );
+}
+
+function makeSplitter(handle, paneA, _paneB, dir, container) {
+  let active = false;
+
+  handle.addEventListener('mousedown', e => {
+    active = true;
+    handle.classList.add('dragging');
+    document.body.style.cursor      = dir === 'h' ? 'col-resize' : 'row-resize';
+    document.body.style.userSelect  = 'none';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (!active) return;
+    const rect = container.getBoundingClientRect();
+    let pct;
+    if (dir === 'h') {
+      pct = Math.max(15, Math.min(85, (e.clientX - rect.left) / rect.width  * 100));
+    } else {
+      pct = Math.max(15, Math.min(80, (e.clientY - rect.top)  / rect.height * 100));
+    }
+    paneA.style.flex = `0 0 ${pct}%`;
+    redrawAll();
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!active) return;
+    active = false;
+    handle.classList.remove('dragging');
+    document.body.style.cursor     = '';
+    document.body.style.userSelect = '';
+    redrawAll();
+  });
+}
+
+function redrawAll() {
+  [tableInst, sharesInst, growthInst].forEach(t => { try { t?.redraw(); } catch {} });
+}
+
+// ============================================================
+// Variable list
 // ============================================================
 async function loadVariableList() {
   try {
     S.variables = await api.variables();
-    const sel   = document.getElementById('variable-select');
+    const sel = document.getElementById('variable-select');
     sel.innerHTML = '<option value="">— sélectionner —</option>';
     S.variables.forEach(v => {
       const o = document.createElement('option');
-      o.value       = v.name;
-      o.textContent = v.name + ' (' + v.type.toUpperCase() + ')';
+      o.value = v.name;
+      o.textContent = `${v.name}  (${v.type.toUpperCase()})`;
       sel.appendChild(o);
     });
     setStatus(`${S.variables.length} variable(s) disponible(s) dans ./data`);
   } catch {
-    setStatus('Impossible de contacter le serveur. Lancez : Rscript start.R', 'error');
+    setStatus('Impossible de contacter le serveur — lancez : Rscript start.R', 'error');
   }
 }
 
 async function loadOperationsList() {
-  try {
-    S.operations = await api.operations();
-  } catch {
-    S.operations = [];
-  }
+  try { S.operations = await api.operations(); }
+  catch { S.operations = []; }
 }
 
+// ============================================================
+// Load a variable
+// ============================================================
 async function loadVariable(name) {
   if (!name) return;
   showLoad(true);
@@ -151,13 +202,13 @@ async function loadVariable(name) {
     setDirty(false);
 
     updateYearSelector();
-    buildTable();
-    updateCharts();
-
+    buildMainTable();
     setTableInfo(`${S.variable} — ${S.data.length} lignes`);
     setStatus(`Variable "${name}" chargée (${res.total_rows} lignes)`, 'success');
-  } catch(e) {
-    setStatus('Erreur: ' + e.message, 'error');
+
+    await updateAnalysisTables(true);
+  } catch (e) {
+    setStatus('Erreur : ' + e.message, 'error');
   } finally {
     showLoad(false);
   }
@@ -175,16 +226,13 @@ function updateYearSelector() {
     S.year = null;
     return;
   }
-
   ctrl.style.display = 'flex';
-  sel.innerHTML      = '<option value="">Toutes</option>';
+  sel.innerHTML = '<option value="">Toutes</option>';
   S.years.forEach(y => {
     const o = document.createElement('option');
     o.value = y; o.textContent = y;
     sel.appendChild(o);
   });
-
-  // Default: last year
   S.year    = S.years[S.years.length - 1];
   sel.value = S.year;
 }
@@ -195,54 +243,53 @@ function filteredData() {
 }
 
 // ============================================================
-// Table (Tabulator)
+// Main editable data table
 // ============================================================
-function buildTable() {
+function buildMainTable() {
   const container = document.getElementById('data-table');
 
-  // Build column definitions
   const cols = S.columns.map(col => {
     const isVal  = col === 'VALUE';
     const isCode = col === 'TERRITORIAL_CODE';
     return {
-      title:       col,
-      field:       col,
-      sorter:      isVal ? 'number' : 'string',
+      title:        col,
+      field:        col,
+      sorter:       isVal ? 'number' : 'string',
       headerFilter: !isVal,
       editor:       isVal ? 'number' : false,
       editorParams: isVal ? { step: 'any' } : {},
       cssClass:     isVal ? 'value-cell' : (isCode ? 'code-cell' : ''),
       width:        isVal ? 160 : (isCode ? 130 : undefined),
-      formatter:    isVal ? (cell) => {
-        const v = cell.getValue();
-        return (v == null || v === '') ? '' : fmt(v);
-      } : undefined
+      resizable:    true,
+      formatter:    isVal
+        ? cell => {
+            const v = cell.getValue();
+            return (v == null || v === '') ? '' : fmtNum(v);
+          }
+        : undefined
     };
   });
 
   if (tableInst) { tableInst.destroy(); tableInst = null; }
 
   tableInst = new Tabulator(container, {
-    data:              [],
-    columns:           cols,
-    height:            '100%',
-    layout:            'fitColumns',
-    selectable:        true,
-    selectableRangeMode: 'click',
-    movableColumns:    false,
-    placeholder:       'Aucune donnée',
+    data:               [],
+    columns:            cols,
+    height:             '100%',
+    layout:             'fitColumns',
+    selectable:         true,
+    selectableRangeMode:'click',
+    movableColumns:     false,
+    placeholder:        'Aucune donnée',
 
-    // Inline edit
     cellEdited(cell) {
-      const rowData = cell.getRow().getData();
-      const val     = cell.getValue();
-      const idx     = findIdx(rowData);
-      if (idx >= 0) S.data[idx].VALUE = val;
+      const row = cell.getRow().getData();
+      const idx = findIdx(row);
+      if (idx >= 0) S.data[idx].VALUE = cell.getValue();
       setDirty(true);
-      updateCharts();
+      scheduleAnalysis();
     },
 
-    // Right-click on cell
     cellContext(e, cell) {
       e.preventDefault();
       S.ctxCell      = cell.getData();
@@ -251,21 +298,16 @@ function buildTable() {
       showCtxMenu(e.clientX, e.clientY, cell.getField() === 'VALUE');
     },
 
-    // Row selection changed
     rowSelectionChanged(data) {
       S.selectedRows = data;
-      const n = data.length;
-      setSelInfo(n > 0 ? `${n} ligne(s) sélectionnée(s)` : '');
+      setSelInfo(data.length > 0 ? `${data.length} ligne(s) sélectionnée(s)` : '');
     }
   });
 
-  refreshTable();
+  refreshMainTable();
 }
 
-function refreshTable() {
-  if (!tableInst) return;
-  tableInst.setData(filteredData());
-}
+function refreshMainTable() { if (tableInst) tableInst.setData(filteredData()); }
 
 function findIdx(row) {
   return S.data.findIndex(d => {
@@ -278,89 +320,138 @@ function findIdx(row) {
 
 // Right-click in empty table area
 document.getElementById('data-table').addEventListener('contextmenu', e => {
-  if (e.target.closest('.tabulator-cell')) return; // handled by Tabulator
+  if (e.target.closest('.tabulator-cell')) return;
   e.preventDefault();
-  S.ctxCell  = null;
-  S.ctxField = null;
+  S.ctxCell = null; S.ctxField = null;
   showCtxMenu(e.clientX, e.clientY, false);
 });
 
 // ============================================================
-// Charts (Chart.js)
+// Analysis tables (shares + growth) — computed in R
 // ============================================================
-const PALETTE = [
-  '#4361ee','#3a0ca3','#7209b7','#f72585','#4cc9f0',
-  '#4895ef','#560bad','#b5179e','#f77f00','#fcbf49',
-  '#06d6a0','#118ab2','#073b4c','#d62828','#023e8a',
-  '#0077b6','#00b4d8','#90e0ef','#ef233c','#8d99ae'
-];
+let analysisTimer = null;
 
-function colors(n) {
-  return Array.from({length: n}, (_, i) => PALETTE[i % PALETTE.length]);
+function scheduleAnalysis() {
+  clearTimeout(analysisTimer);
+  analysisTimer = setTimeout(() => updateAnalysisTables(true), 700);
 }
 
-function updateCharts() {
-  const rows   = filteredData();
-  const sorted = [...rows].sort((a, b) => (b.VALUE || 0) - (a.VALUE || 0));
-  const labels = sorted.map(d => d.TERRITORIAL_NAME || d.TERRITORIAL_CODE || '?');
-  const values = sorted.map(d => +(d.VALUE) || 0);
-  const total  = values.reduce((s, v) => s + v, 0);
-  const shares = values.map(v => total > 0 ? +(v / total * 100).toFixed(2) : 0);
-  const clrs   = colors(sorted.length);
+async function updateAnalysisTables(immediate = false) {
+  if (!S.data || S.data.length === 0 || !S.variable) return;
+  if (!immediate) { scheduleAnalysis(); return; }
 
-  const barTitle = (S.variable || '') + (S.year ? ` — ${S.year}` : '');
+  try {
+    const body = { data: S.data, year_col: S.yearCol || '' };
+    const [sr, gr] = await Promise.all([api.shares(S.data, S.yearCol), api.growth(S.data, S.yearCol)]);
+    buildSharesTable(sr.columns || [], sr.data || []);
+    buildGrowthTable(gr.columns || [], gr.data || []);
+  } catch (e) {
+    console.error('Analysis update failed:', e);
+  }
+}
 
-  if (!barChart) {
-    barChart = new Chart(document.getElementById('bar-chart').getContext('2d'), {
-      type: 'bar',
-      data: { labels, datasets: [{ data: values, backgroundColor: clrs, borderWidth: 0 }] },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        indexAxis: 'y',
-        plugins: {
-          legend: { display: false },
-          title:  { display: true, text: barTitle, font: { size: 12 }, color: '#555' },
-          tooltip: {
-            callbacks: {
-              label: ctx => ' ' + fmt(ctx.parsed.x)
-            }
-          }
-        },
-        scales: {
-          x: { ticks: { callback: v => new Intl.NumberFormat('fr-BE', { notation: 'compact' }).format(v) } },
-          y: { ticks: { font: { size: 11 } } }
-        }
-      }
-    });
-  } else {
-    barChart.data.labels                         = labels;
-    barChart.data.datasets[0].data               = values;
-    barChart.data.datasets[0].backgroundColor    = clrs;
-    barChart.options.plugins.title.text          = barTitle;
-    barChart.update('none');
+/* ── Shares table ── */
+function buildSharesTable(columns, data) {
+  const container = document.getElementById('shares-table');
+
+  if (!columns.length || !data.length) {
+    if (sharesInst) { sharesInst.destroy(); sharesInst = null; }
+    container.innerHTML = '<div class="empty-pane">Données insuffisantes</div>';
+    return;
   }
 
-  if (!pieChart) {
-    pieChart = new Chart(document.getElementById('pie-chart').getContext('2d'), {
-      type: 'doughnut',
-      data: { labels, datasets: [{ data: shares, backgroundColor: clrs, borderWidth: 2, borderColor: '#fff' }] },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { position: 'right', labels: { boxWidth: 11, font: { size: 11 }, padding: 6 } },
-          tooltip: {
-            callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed.toFixed(1)} %` }
+  const cols = columns.map(col => {
+    const isCode = col === 'TERRITORIAL_CODE';
+    const isName = col === 'TERRITORIAL_NAME';
+    const isNum  = !isCode && !isName;
+    return {
+      title:        isCode ? 'Code' : (isName ? 'Territoire' : String(col)),
+      field:        col,
+      sorter:       isNum ? 'number' : 'string',
+      hozAlign:     isNum ? 'right' : 'left',
+      width:        isCode ? 90 : (isNum ? 82 : undefined),
+      headerFilter: isName,
+      resizable:    true,
+      cssClass:     isNum ? 'num-cell' : '',
+      formatter:    isNum
+        ? cell => {
+            const v = cell.getValue();
+            if (v == null || v === '') return '<span style="color:#ccc">—</span>';
+            const el  = cell.getElement();
+            const pct = Math.min(+v / 100, 1);
+            el.style.background = `rgba(67,97,238,${(pct * 0.72).toFixed(3)})`;
+            el.style.color = pct > 0.55 ? '#fff' : 'var(--text)';
+            return (+v).toFixed(2) + ' %';
           }
-        }
-      }
-    });
+        : undefined
+    };
+  });
+
+  if (sharesInst) {
+    sharesInst.setColumns(cols);
+    sharesInst.setData(data);
   } else {
-    pieChart.data.labels                      = labels;
-    pieChart.data.datasets[0].data            = shares;
-    pieChart.data.datasets[0].backgroundColor = clrs;
-    pieChart.update('none');
+    sharesInst = new Tabulator(container, {
+      data, columns: cols, height: '100%', layout: 'fitColumns',
+      placeholder: 'Aucune donnée'
+    });
+  }
+}
+
+/* ── Growth table ── */
+function buildGrowthTable(columns, data) {
+  const container = document.getElementById('growth-table');
+
+  if (!columns.length || !data.length) {
+    if (growthInst) { growthInst.destroy(); growthInst = null; }
+    container.innerHTML = '<div class="empty-pane">Pas de données temporelles disponibles</div>';
+    return;
+  }
+
+  const cols = columns.map(col => {
+    const isCode = col === 'TERRITORIAL_CODE';
+    const isName = col === 'TERRITORIAL_NAME';
+    const isNum  = !isCode && !isName;
+    return {
+      title:        isCode ? 'Code' : (isName ? 'Territoire' : col),
+      field:        col,
+      sorter:       isNum ? 'number' : 'string',
+      hozAlign:     isNum ? 'right' : 'left',
+      width:        isCode ? 90 : (isNum ? 112 : undefined),
+      headerFilter: isName,
+      resizable:    true,
+      cssClass:     isNum ? 'num-cell' : '',
+      formatter:    isNum
+        ? cell => {
+            const v = cell.getValue();
+            if (v == null || v === '' || isNaN(+v))
+              return '<span style="color:#ccc">—</span>';
+            const el  = cell.getElement();
+            const abs = Math.abs(+v);
+            const k   = Math.min(abs / 10, 0.72);  // saturate at 10 %
+            if (+v > 0) {
+              el.style.background = `rgba(39,174,96,${k.toFixed(3)})`;
+              el.style.color = k > 0.45 ? '#fff' : 'var(--text)';
+              return '+' + (+v).toFixed(2) + ' %';
+            } else if (+v < 0) {
+              el.style.background = `rgba(231,76,60,${k.toFixed(3)})`;
+              el.style.color = k > 0.45 ? '#fff' : 'var(--text)';
+              return (+v).toFixed(2) + ' %';
+            }
+            return '0.00 %';
+          }
+        : undefined
+    };
+  });
+
+  if (growthInst) {
+    growthInst.setColumns(cols);
+    growthInst.setData(data);
+  } else {
+    growthInst = new Tabulator(container, {
+      data, columns: cols, height: '100%', layout: 'fitColumns',
+      placeholder: 'Aucune donnée temporelle'
+    });
   }
 }
 
@@ -370,22 +461,19 @@ function updateCharts() {
 function showCtxMenu(x, y, isValueCell) {
   const menu = document.getElementById('ctx-menu');
   menu.innerHTML = '';
-
   const items = [];
 
-  // --- Cell-level ---
   if (isValueCell && S.ctxCell) {
     const name = S.ctxCell.TERRITORIAL_NAME || S.ctxCell.TERRITORIAL_CODE || '';
     items.push({ type: 'header', label: `Cellule : ${name}` });
-    items.push({ type: 'action', icon: '✏️', label: 'Modifier la valeur',
-                 fn: openEditDialog });
+    items.push({ type: 'action', icon: '✏️', label: 'Modifier la valeur', fn: openEditDialog });
     items.push({ type: 'sep' });
   }
 
-  // --- Selection-level ---
   if (S.selectedRows.length > 1) {
-    const selOps = S.operations.filter(o => o.scope &&
-      (o.scope.includes('selection') || o.scope.includes('cell')));
+    const selOps = S.operations.filter(o =>
+      o.scope && (o.scope.includes('selection') || o.scope.includes('cell'))
+    );
     if (selOps.length) {
       items.push({ type: 'header', label: `Sélection (${S.selectedRows.length} lignes)` });
       selOps.forEach(op =>
@@ -396,7 +484,6 @@ function showCtxMenu(x, y, isValueCell) {
     }
   }
 
-  // --- Dataset-level ---
   const dsOps = S.operations.filter(o => o.scope && o.scope.includes('dataset'));
   items.push({ type: 'header', label: 'Toutes les données' + (S.year ? ` (${S.year})` : '') });
   dsOps.forEach(op =>
@@ -404,7 +491,6 @@ function showCtxMenu(x, y, isValueCell) {
                  fn: () => openOpDialog(op, 'dataset') })
   );
 
-  // Render
   items.forEach(item => {
     let el;
     if (item.type === 'header') {
@@ -417,38 +503,31 @@ function showCtxMenu(x, y, isValueCell) {
     } else {
       el = document.createElement('div');
       el.className = 'ctx-item';
-      el.innerHTML = `<span style="font-size:12px;width:16px">${item.icon||''}</span>
+      el.innerHTML = `<span style="font-size:12px;width:16px">${item.icon || ''}</span>
                       <span>${item.label}</span>`;
       el.addEventListener('click', () => { hideCtxMenu(); item.fn(); });
     }
     menu.appendChild(el);
   });
 
-  // Position
   menu.style.display = 'block';
   const mw = 240, mh = menu.scrollHeight;
-  const lx = x + mw > window.innerWidth  ? x - mw : x;
-  const ly = y + mh > window.innerHeight ? y - mh : y;
-  menu.style.left = lx + 'px';
-  menu.style.top  = ly + 'px';
+  menu.style.left = (x + mw > window.innerWidth  ? x - mw : x) + 'px';
+  menu.style.top  = (y + mh > window.innerHeight ? y - mh : y) + 'px';
 }
 
-function hideCtxMenu() {
-  document.getElementById('ctx-menu').style.display = 'none';
-}
+function hideCtxMenu() { document.getElementById('ctx-menu').style.display = 'none'; }
 
-document.addEventListener('click', e => {
-  if (!e.target.closest('#ctx-menu')) hideCtxMenu();
-});
+document.addEventListener('click', e => { if (!e.target.closest('#ctx-menu')) hideCtxMenu(); });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     hideCtxMenu();
-    ['edit-dialog','op-modal','save-modal','hist-modal'].forEach(closeModal);
+    ['edit-dialog', 'op-modal', 'save-modal', 'hist-modal'].forEach(closeModal);
   }
 });
 
 // ============================================================
-// Edit dialog (direct cell value edit)
+// Edit dialog
 // ============================================================
 function openEditDialog() {
   if (!S.ctxCell) return;
@@ -458,8 +537,7 @@ function openEditDialog() {
   inp.value = S.ctxCell.VALUE ?? '';
   inp.classList.remove('error');
   openModal('edit-dialog');
-  inp.focus();
-  inp.select();
+  inp.focus(); inp.select();
 }
 
 function confirmEdit() {
@@ -473,12 +551,11 @@ function confirmEdit() {
     if (yr) return d.TERRITORIAL_CODE === code && String(d[S.yearCol]) === String(yr);
     return d.TERRITORIAL_CODE === code;
   });
-
   if (idx >= 0) {
     S.data[idx].VALUE = val;
     setDirty(true);
-    refreshTable();
-    updateCharts();
+    refreshMainTable();
+    scheduleAnalysis();
     setStatus(`Valeur modifiée pour ${code}`, 'success');
   }
   closeModal('edit-dialog');
@@ -498,9 +575,8 @@ function openOpDialog(op, scope) {
   document.getElementById('op-modal-desc').textContent  = op.description;
 
   let scopeText = 'Toutes les données';
-  if (scope === 'selection' && S.selectedRows.length > 0) {
+  if (scope === 'selection' && S.selectedRows.length > 0)
     scopeText = `Sélection : ${S.selectedRows.length} territoire(s)`;
-  }
   if (S.year) scopeText += ` — année ${S.year}`;
   document.getElementById('op-scope-info').textContent = scopeText;
 
@@ -509,28 +585,22 @@ function openOpDialog(op, scope) {
   (op.params || []).forEach(p => {
     const grp = document.createElement('div');
     grp.className = 'form-group';
-
     const lbl = document.createElement('label');
-    lbl.htmlFor     = `p_${p.id}`;
+    lbl.htmlFor = `p_${p.id}`;
     lbl.textContent = p.label + (p.required ? ' *' : '');
-
     const inp = document.createElement('input');
     inp.id          = `p_${p.id}`;
     inp.name        = p.id;
-    inp.type        = (p.type === 'integer') ? 'number' : 'number';
-    inp.step        = (p.type === 'integer') ? '1' : 'any';
+    inp.type        = 'number';
+    inp.step        = p.type === 'integer' ? '1' : 'any';
     inp.required    = !!p.required;
     inp.placeholder = p.label;
     if (p.default != null) inp.value = p.default;
-
     grp.append(lbl, inp);
     form.appendChild(grp);
   });
-
-  // Store context
   form.dataset.opId  = op.id;
   form.dataset.scope = scope;
-
   openModal('op-modal');
   form.querySelector('input')?.focus();
 }
@@ -539,8 +609,6 @@ async function executeOp() {
   const form  = document.getElementById('op-form');
   const opId  = form.dataset.opId;
   const scope = form.dataset.scope;
-
-  // Collect params
   const params = {};
   for (const inp of form.querySelectorAll('input[name]')) {
     if (inp.required && inp.value === '') {
@@ -553,26 +621,24 @@ async function executeOp() {
 
   closeModal('op-modal');
   showLoad(true);
-
   try {
     const body = {
       variable:  S.variable,
       params,
       year:      S.year || null,
       selection: scope === 'selection'
-                   ? S.selectedRows.map(r => r.TERRITORIAL_CODE)
-                   : null
+        ? S.selectedRows.map(r => r.TERRITORIAL_CODE)
+        : null
     };
-
     const res = await api.applyOp(opId, body);
     if (!res.success) throw new Error(res.error || 'Erreur inconnue');
 
     S.data = res.data;
     setDirty(true);
-    refreshTable();
-    updateCharts();
+    refreshMainTable();
+    await updateAnalysisTables(true);
     setStatus(`Opération "${opId}" appliquée`, 'success');
-  } catch(e) {
+  } catch (e) {
     setStatus('Erreur : ' + e.message, 'error');
   } finally {
     showLoad(false);
@@ -597,13 +663,11 @@ async function executeSave() {
   showLoad(true);
   try {
     const res = await api.save(S.variable, S.data, desc);
-    if (!res.success) throw new Error(res.error || 'Erreur inconnue');
+    if (!res.success) throw new Error(res.error);
     setStatus(`Snapshot créé : ${res.timestamp}`, 'success');
-  } catch(e) {
+  } catch (e) {
     setStatus('Erreur : ' + e.message, 'error');
-  } finally {
-    showLoad(false);
-  }
+  } finally { showLoad(false); }
 }
 
 document.getElementById('btn-save-confirm').addEventListener('click', executeSave);
@@ -612,7 +676,7 @@ document.getElementById('save-desc').addEventListener('keydown', e => {
 });
 
 // ============================================================
-// History (snapshots)
+// History
 // ============================================================
 async function openHistory() {
   if (!S.variable) { setStatus('Aucune variable sélectionnée', 'warning'); return; }
@@ -621,7 +685,6 @@ async function openHistory() {
     const history = await api.getHistory(S.variable);
     const list    = document.getElementById('hist-list');
     list.innerHTML = '';
-
     if (!history.length) {
       list.innerHTML = '<div class="hist-empty">Aucun snapshot disponible.</div>';
     } else {
@@ -633,10 +696,9 @@ async function openHistory() {
             <div class="hist-dt">${h.datetime || h.timestamp}</div>
             <div class="hist-desc">${h.description || '<em style="color:#bbb">sans description</em>'}</div>
             <div class="hist-meta">${h.rows ?? '?'} lignes · total = ${
-              h.total != null ? fmt(h.total) : 'N/A'}</div>
+              h.total != null ? fmtNum(h.total) : 'N/A'}</div>
           </div>
-          <button class="btn btn-danger btn-restore" style="flex-shrink:0">Restaurer</button>
-        `;
+          <button class="btn btn-danger btn-restore" style="flex-shrink:0">Restaurer</button>`;
         el.querySelector('.btn-restore').addEventListener('click', async () => {
           closeModal('hist-modal');
           await restoreSnapshot(h.timestamp);
@@ -645,28 +707,24 @@ async function openHistory() {
       });
     }
     openModal('hist-modal');
-  } catch(e) {
+  } catch (e) {
     setStatus('Erreur : ' + e.message, 'error');
-  } finally {
-    showLoad(false);
-  }
+  } finally { showLoad(false); }
 }
 
 async function restoreSnapshot(ts) {
   showLoad(true);
   try {
     const res = await api.restore(S.variable, ts);
-    if (!res.success) throw new Error(res.error || 'Erreur inconnue');
+    if (!res.success) throw new Error(res.error);
     S.data = res.data;
     setDirty(false);
-    refreshTable();
-    updateCharts();
+    refreshMainTable();
+    await updateAnalysisTables(true);
     setStatus(`Données restaurées depuis : ${ts}`, 'success');
-  } catch(e) {
+  } catch (e) {
     setStatus('Erreur : ' + e.message, 'error');
-  } finally {
-    showLoad(false);
-  }
+  } finally { showLoad(false); }
 }
 
 // ============================================================
@@ -677,29 +735,22 @@ async function commitData() {
   showLoad(true);
   try {
     const res = await api.commit(S.variable, S.data);
-    if (!res.success) throw new Error(res.error || 'Erreur inconnue');
+    if (!res.success) throw new Error(res.error);
     setDirty(false);
     setStatus('Données enregistrées sur le disque.', 'success');
-  } catch(e) {
+  } catch (e) {
     setStatus('Erreur : ' + e.message, 'error');
-  } finally {
-    showLoad(false);
-  }
+  } finally { showLoad(false); }
 }
 
 // ============================================================
 // Event wiring
 // ============================================================
-document.getElementById('variable-select').addEventListener('change', e => {
-  loadVariable(e.target.value);
-});
-
+document.getElementById('variable-select').addEventListener('change', e => loadVariable(e.target.value));
 document.getElementById('year-select').addEventListener('change', e => {
   S.year = e.target.value || null;
-  refreshTable();
-  updateCharts();
+  refreshMainTable();
 });
-
 document.getElementById('btn-save').addEventListener('click',    openSaveDialog);
 document.getElementById('btn-history').addEventListener('click', openHistory);
 document.getElementById('btn-commit').addEventListener('click',  commitData);
@@ -709,6 +760,7 @@ document.getElementById('btn-commit').addEventListener('click',  commitData);
 // ============================================================
 async function init() {
   setStatus('Connexion au serveur R…');
+  initSplitters();
   await Promise.all([loadVariableList(), loadOperationsList()]);
 }
 

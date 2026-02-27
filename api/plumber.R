@@ -213,3 +213,43 @@ function(operation, req) {
     )
   }, error = function(e) list(success = FALSE, error = conditionMessage(e)))
 }
+
+# ============================================================
+# Analytical computation endpoints  (all transformations in R)
+# ============================================================
+
+# Helper: parse body and extract a data.table + year_col
+.parse_compute_body <- function(req) {
+  body     <- jsonlite::fromJSON(req$postBody, simplifyVector = FALSE)
+  dt       <- rbindlist(lapply(body$data, as.data.table), fill = TRUE)
+  year_col <- body$year_col
+  if (is.null(year_col) || identical(year_col, "null") || nchar(trimws(year_col)) == 0)
+    year_col <- NULL
+  if ("VALUE" %in% names(dt))
+    dt[, VALUE := suppressWarnings(as.numeric(VALUE))]
+  list(dt = dt, year_col = year_col)
+}
+
+#* Compute percentage shares in wide format from current in-memory data
+#* Expects JSON body: { "data": [...], "year_col": "YEAR" }
+#* @post /api/compute/shares
+#* @serializer unboxedJSON
+function(req) {
+  tryCatch({
+    p      <- .parse_compute_body(req)
+    result <- compute_shares(p$dt, p$year_col)
+    list(columns = as.list(names(result)), data = dt_to_records(result))
+  }, error = function(e) list(error = conditionMessage(e), columns = list(), data = list()))
+}
+
+#* Compute year-over-year growth rates in wide format from current in-memory data
+#* Expects JSON body: { "data": [...], "year_col": "YEAR" }
+#* @post /api/compute/growth
+#* @serializer unboxedJSON
+function(req) {
+  tryCatch({
+    p      <- .parse_compute_body(req)
+    result <- compute_growth(p$dt, p$year_col)
+    list(columns = as.list(names(result)), data = dt_to_records(result))
+  }, error = function(e) list(error = conditionMessage(e), columns = list(), data = list()))
+}

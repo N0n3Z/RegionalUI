@@ -159,3 +159,92 @@ dt_to_records <- function(dt) {
   df <- as.data.frame(dt)
   lapply(seq_len(nrow(df)), function(i) as.list(df[i, , drop = FALSE]))
 }
+
+# ---- Analytical computation functions -----------------------
+# Called by POST /api/compute/* endpoints.
+# All transformations are performed in R.
+
+#' Percentage share of each territory in the total VALUE,
+#' returned in wide format (one numeric column per year).
+#' @param dt   data.table with TERRITORIAL_CODE and VALUE columns
+#' @param year_col character name of the year column, or NULL
+#' @return data.table
+compute_shares <- function(dt, year_col = NULL) {
+  dt <- data.table::copy(dt)
+  if ("VALUE" %in% names(dt))
+    dt[, VALUE := suppressWarnings(as.numeric(VALUE))]
+
+  id_cols <- intersect(c("TERRITORIAL_CODE", "TERRITORIAL_NAME"), names(dt))
+
+  if (is.null(year_col) || !year_col %in% names(dt)) {
+    # No temporal dimension — single share column
+    total  <- sum(dt$VALUE, na.rm = TRUE)
+    result <- data.table::copy(dt[, c(id_cols, "VALUE"), with = FALSE])
+    result[, `PART (%)` := if (total > 0) round(VALUE / total * 100, 4) else 0]
+    result[, VALUE := NULL]
+    data.table::setorderv(result, "TERRITORIAL_CODE")
+    return(result)
+  }
+
+  # Compute share per territory per year
+  dt[, PART := {
+    yr_total <- sum(VALUE, na.rm = TRUE)
+    if (yr_total > 0) round(VALUE / yr_total * 100, 4) else 0
+  }, by = year_col]
+
+  # Pivot: territories in rows, years in columns
+  id_str <- paste(id_cols, collapse = " + ")
+  wide   <- data.table::dcast(dt,
+               stats::as.formula(paste(id_str, "~", year_col)),
+               value.var = "PART")
+  data.table::setorderv(wide, "TERRITORIAL_CODE")
+  wide
+}
+
+#' Year-over-year growth rates per territory,
+#' returned in wide format (one column per consecutive-year pair).
+#' @param dt   data.table
+#' @param year_col character name of the year column, or NULL
+#' @return data.table, or empty data.table if no temporal data
+compute_growth <- function(dt, year_col = NULL) {
+  if (is.null(year_col) || !year_col %in% names(dt))
+    return(data.table::data.table())
+
+  dt <- data.table::copy(dt)
+  if ("VALUE" %in% names(dt))
+    dt[, VALUE := suppressWarnings(as.numeric(VALUE))]
+
+  id_cols <- intersect(c("TERRITORIAL_CODE", "TERRITORIAL_NAME"), names(dt))
+  years   <- sort(unique(suppressWarnings(as.numeric(dt[[year_col]]))))
+  years   <- years[!is.na(years)]
+
+  if (length(years) < 2) return(data.table::data.table())
+
+  # Base: unique territories, sorted
+  base <- unique(dt[, id_cols, with = FALSE])
+  data.table::setorderv(base, "TERRITORIAL_CODE")
+
+  for (i in seq(2, length(years))) {
+    yr_prev  <- years[i - 1]
+    yr_curr  <- years[i]
+    col_name <- paste0(yr_prev, " \u2192 ", yr_curr)   # e.g. "2018 → 2019"
+
+    prev_dt <- dt[suppressWarnings(as.numeric(get(year_col))) == yr_prev,
+                  .(TERRITORIAL_CODE, VAL_PREV = VALUE)]
+    curr_dt <- dt[suppressWarnings(as.numeric(get(year_col))) == yr_curr,
+                  .(TERRITORIAL_CODE, VAL_CURR = VALUE)]
+
+    merged <- merge(prev_dt, curr_dt, by = "TERRITORIAL_CODE", all = TRUE)
+    merged[, GR := ifelse(
+      !is.na(VAL_PREV) & VAL_PREV != 0,
+      round((VAL_CURR / VAL_PREV - 1) * 100, 4),
+      NA_real_
+    )]
+
+    base <- merge(base, merged[, .(TERRITORIAL_CODE, GR)],
+                  by = "TERRITORIAL_CODE", all.x = TRUE)
+    data.table::setnames(base, "GR", col_name)
+  }
+
+  base
+}

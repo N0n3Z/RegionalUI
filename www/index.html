@@ -61,29 +61,45 @@
 <!-- ===================== MAIN ===================== -->
 <main class="app-main">
 
-  <!-- Table section -->
-  <section class="table-section">
-    <div class="table-toolbar">
-      <span id="table-info" class="table-info">Aucune variable chargée</span>
-      <span class="table-hint">Clic droit pour les opérations · Double-clic pour éditer la colonne VALUE</span>
+  <!-- ── TOP ROW : data table (left) │ shares table (right) ── -->
+  <section id="top-row">
+
+    <!-- Left pane: main editable data table -->
+    <div id="pane-data" class="pane">
+      <div class="pane-header">
+        <span id="table-info" class="pane-title">Aucune variable chargée</span>
+        <span class="pane-hint">Clic droit pour les opérations &nbsp;·&nbsp; Double-clic sur VALUE pour éditer</span>
+      </div>
+      <div id="data-table" class="pane-body"></div>
     </div>
-    <div id="data-table"></div>
+
+    <!-- Horizontal drag handle -->
+    <div class="drag-handle drag-h" id="drag-h" title="Glisser pour redimensionner"></div>
+
+    <!-- Right pane: share % wide table (all years) -->
+    <div id="pane-shares" class="pane">
+      <div class="pane-header">
+        <span class="pane-title">Parts relatives (%)</span>
+        <span class="pane-hint">format large · toutes les années · calculé en R</span>
+      </div>
+      <div id="shares-table" class="pane-body">
+        <div class="empty-pane">Sélectionnez une variable</div>
+      </div>
+    </div>
+
   </section>
 
-  <!-- Charts section -->
-  <section class="charts-section">
-    <div class="chart-panel">
-      <div class="chart-title">Valeurs par territoire</div>
-      <div class="chart-wrap">
-        <canvas id="bar-chart"></canvas>
-      </div>
+  <!-- ── VERTICAL drag handle ── -->
+  <div class="drag-handle drag-v" id="drag-v" title="Glisser pour redimensionner"></div>
+
+  <!-- ── BOTTOM ROW : growth rates table ── -->
+  <section id="bottom-row">
+    <div class="pane-header">
+      <span class="pane-title">Croissances annuelles (%)</span>
+      <span class="pane-hint">variation relative d'une année à l'autre · calculé en R</span>
     </div>
-    <div class="chart-divider"></div>
-    <div class="chart-panel">
-      <div class="chart-title">Part relative (%)</div>
-      <div class="chart-wrap">
-        <canvas id="pie-chart"></canvas>
-      </div>
+    <div id="growth-table" class="pane-body">
+      <div class="empty-pane">Sélectionnez une variable</div>
     </div>
   </section>
 
