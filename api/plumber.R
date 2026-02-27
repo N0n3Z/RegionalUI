@@ -11,9 +11,7 @@ library(jsonlite)
 source("api/utils.R")
 source("api/operations.R")
 
-# ---- Serve static web interface at / -----------------------
-#* @assets ./www /
-list()
+# Static files are served via pr_static() in start.R
 
 # ---- CORS filter -------------------------------------------
 #* @filter cors
